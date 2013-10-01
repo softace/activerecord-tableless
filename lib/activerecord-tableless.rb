@@ -157,7 +157,7 @@ module ActiveRecord
 
         end
       else
-        raise Exceptioin.new("Unsupported ActiveRecord version")
+        raise Exception.new("Unsupported ActiveRecord version")
       end
 
       def transaction(&block)
