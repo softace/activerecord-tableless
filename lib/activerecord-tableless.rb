@@ -29,10 +29,8 @@ module ActiveRecord
   #
   module Tableless
 
-    class Exception < StandardError
-    end
-    class NoDatabase < Exception
-    end
+    class NoDatabase < StandardError; end
+    class Unsupported < StandardError; end
 
     def self.included( base ) #:nodoc:
       base.send :extend, ActsMethods
@@ -59,7 +57,7 @@ module ActiveRecord
             :columns => []
           }
         else
-          raise Exception.new("Sorry, ActiveRecord version #{ActiveRecord::VERSION::STRING} is not supported")
+          raise Unsupported.new("Sorry, ActiveRecord version #{ActiveRecord::VERSION::STRING} is not supported")
         end
 
         # extend
@@ -157,7 +155,7 @@ module ActiveRecord
 
         end
       else
-        raise Exception.new("Unsupported ActiveRecord version")
+        raise Unsupported.new("Unsupported ActiveRecord version")
       end
 
       def transaction(&block)
