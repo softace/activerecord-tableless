@@ -86,7 +86,13 @@ module ActiveRecord
 
       # Register a new column.
       def column(name, sql_type = nil, default = nil, null = true)
-        tableless_options[:columns] << ActiveRecord::ConnectionAdapters::Column.new(name.to_s, default, sql_type.to_s, null)
+        #tableless_options[:columns] << ActiveRecord::ConnectionAdapters::Column.new(name.to_s, default, sql_type.to_s, null)
+        if ActiveRecord::VERSION::STRING >= "4.2.0"
+          cast_type = "ActiveRecord::Type::#{sql_type.to_s.camelize}".constantize.new
+          tableless_options[:columns] << ActiveRecord::ConnectionAdapters::Column.new(name.to_s, default, cast_type, sql_type.to_s, null)
+        else
+          tableless_options[:columns] << ActiveRecord::ConnectionAdapters::Column.new(name.to_s, default, sql_type.to_s, null)
+        end
       end
 
       # Register a set of colums with the same SQL type
