@@ -45,22 +45,11 @@ module ActiveRecord
       def has_no_table(options = {:database => :fail_fast})
         raise ArgumentError.new("Invalid database option '#{options[:database]}'") unless [:fail_fast, :pretend_success].member? options[:database]
         # keep our options handy
-        if ActiveRecord::VERSION::STRING < "3.1.0"
-          write_inheritable_attribute(:tableless_options,
-                                      { :database => options[:database],
-                                        :columns => []
-                                      }
-                                      )
-          class_inheritable_reader :tableless_options
-        elsif ActiveRecord::VERSION::STRING >= "3.2.0"
-          class_attribute :tableless_options
-          self.tableless_options = {
-            :database => options[:database],
-            :columns => []
-          }
-        else
-          raise Unsupported.new("Sorry, ActiveRecord version #{ActiveRecord::VERSION::STRING} is not supported")
-        end
+        class_attribute :tableless_options
+        self.tableless_options = {
+          :database => options[:database],
+          :columns_hash => {}
+        }
 
         # extend
         extend  ActiveRecord::Tableless::SingletonMethods
@@ -70,6 +59,8 @@ module ActiveRecord
         include ActiveRecord::Tableless::InstanceMethods
 
         # setup columns
+        include ActiveModel::AttributeAssignment
+        include ActiveRecord::ModelSchema
       end
 
       def tableless?
@@ -80,23 +71,23 @@ module ActiveRecord
 
     module SingletonMethods
 
-      # Return the list of columns registered for the model. Used internally by
-      # ActiveRecord
-      def columns
-        tableless_options[:columns]
+      # Used internally by ActiveRecord 5.  This is the special hook that makes everything else work.
+      def load_schema!
+        @columns_hash = tableless_options[:columns_hash].except(*ignored_columns)
+        @columns_hash.each do |name, column|
+          define_attribute(
+              name,
+              connection.lookup_cast_type_from_column(column),
+              default: column.default,
+              user_provided_default: false
+          )
+        end
       end
 
       # Register a new column.
-
-      if ActiveRecord::VERSION::STRING >= "4.2.0"
-        def column(name, sql_type = nil, default = nil, null = true)
-          cast_type = "ActiveRecord::Type::#{sql_type.to_s.camelize}".constantize.new
-          tableless_options[:columns] << ActiveRecord::ConnectionAdapters::Column.new(name.to_s, default, cast_type, sql_type.to_s, null)
-        end
-      else
-        def column(name, sql_type = nil, default = nil, null = true)
-          tableless_options[:columns] << ActiveRecord::ConnectionAdapters::Column.new(name.to_s, default, sql_type.to_s, null)
-        end
+      def column(name, sql_type = nil, default = nil, null = true)
+        cast_type = "ActiveRecord::Type::#{sql_type.to_s.camelize}".constantize.new
+        tableless_options[:columns_hash][name.to_s] = ActiveRecord::ConnectionAdapters::Column.new(name.to_s, default, cast_type, sql_type.to_s, null)
       end
 
       # Register a set of columns with the same SQL type
@@ -115,7 +106,7 @@ module ActiveRecord
         end
       end
 
-      def destroy_all(*args)
+      def destroy_all(*_args)
         case tableless_options[:database]
         when :pretend_success
           []
@@ -125,17 +116,7 @@ module ActiveRecord
       end
 
       case ActiveRecord::VERSION::MAJOR
-      when 3
-        def all(*args)
-          case tableless_options[:database]
-          when :pretend_success
-            []
-          when :fail_fast
-            raise NoDatabase.new("Can't #find_every on Tableless class")
-          end
-
-        end
-      when 4
+      when 5
         def find_by_sql(*args)
           case tableless_options[:database]
           when :pretend_success
@@ -188,21 +169,81 @@ module ActiveRecord
 
       def connection
         conn = Object.new()
-        def conn.quote_table_name(*args)
+        def conn.quote_table_name(*_args)
           ""
         end
-        def conn.quote_column_name(*args)
+        def conn.quote_column_name(*_args)
           ""
         end
-        def conn.substitute_at(*args)
+        def conn.substitute_at(*_args)
           nil
         end
-        def conn.schema_cache(*args)
+        def conn.schema_cache(*_args)
           schema_cache = Object.new()
-          def schema_cache.columns_hash(*args)
+          def schema_cache.columns_hash(*_args)
             Hash.new()
           end
           schema_cache
+        end
+        # Fixes Issue #17. https://github.com/softace/activerecord-tableless/issues/17
+        # The following method is from the ActiveRecord gem: /lib/active_record/connection_adapters/abstract/database_statements.rb .
+        # Sanitizes the given LIMIT parameter in order to prevent SQL injection.
+        #
+        # The +limit+ may be anything that can evaluate to a string via #to_s. It
+        # should look like an integer, or a comma-delimited list of integers, or
+        # an Arel SQL literal.
+        #
+        # Returns Integer and Arel::Nodes::SqlLiteral limits as is.
+        # Returns the sanitized limit parameter, either as an integer, or as a
+        # string which contains a comma-delimited list of integers.
+        def conn.sanitize_limit(limit)
+          if limit.is_a?(Integer) || limit.is_a?(Arel::Nodes::SqlLiteral)
+            limit
+          elsif limit.to_s.include?(',')
+            Arel.sql limit.to_s.split(',').map{ |i| Integer(i) }.join(',')
+          else
+            Integer(limit)
+          end
+        end
+
+        # Called by bound_attributes in /lib/active_record/relation/query_methods.rb
+        # Returns a SQL string with the from, join, where, and having clauses, in addition to the limit and offset.
+        def conn.combine_bind_parameters(**_args)
+          ""
+        end
+
+        def conn.lookup_cast_type_from_column(*_args)
+          lct = Object.new
+          def lct.assert_valid_value(*_args)
+            true
+          end
+          # Needed for Rails 5.0
+          def lct.serialize(args)
+            args
+          end
+          def lct.deserialize(args)
+            args
+          end
+          def lct.cast(args)
+            args
+          end
+          def lct.changed?(*_args)
+            false
+          end
+          def lct.changed_in_place?(*_args)
+            false
+          end
+          lct
+        end
+
+        # This is used in the StatementCache object. It returns an object that
+        # can be used to query the database repeatedly.
+        def conn.cacheable_query(arel) # :nodoc:
+          if prepared_statements
+            ActiveRecord::StatementCache.query visitor, arel.ast
+          else
+            ActiveRecord::StatementCache.partial_query visitor, arel.ast, collector
+          end
         end
         conn
       end
@@ -215,7 +256,7 @@ module ActiveRecord
         attributes.to_a.collect{|(name,value)| escaped_var_name(name, prefix) + "=" + escape_for_url(value) if value }.compact.join("&")
       end
 
-      def quote_value(value, column = nil)
+      def quote_value(_value, _column = nil)
         ""
       end
 
@@ -249,9 +290,7 @@ module ActiveRecord
         end
       end
 
-      if ActiveRecord::VERSION::MAJOR >= 3
-        def add_to_transaction
-        end
+      def add_to_transaction
       end
 
       private

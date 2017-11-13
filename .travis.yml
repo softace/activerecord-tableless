@@ -1,23 +1,10 @@
 language: ruby
-#bundler_args: --without development
 before_install:
-  - rvm @global do gem uninstall bundler --all --executables
-  - rvm @global do gem install bundler -v '~> 1.12.0'
-  - bundle --version
+  - gem install bundler
 rvm:
-  - 2.2.2
-  - 2.2.7
-  - 2.3.0
-  - 2.3.4
+  - 2.2.8
+  - 2.3.5
+  - 2.4.2
 gemfile:
-  - gemfiles/rails30.gemfile
-  - gemfiles/rails32.gemfile
-  - gemfiles/rails40.gemfile
-  - gemfiles/rails41.gemfile
-  - gemfiles/rails42.gemfile
-matrix:
-  include:
-  - rvm: 2.4.0
-    gemfile: gemfiles/rails42.gemfile
-  - rvm: 2.4.1
-    gemfile: gemfiles/rails42.gemfile
+  - gemfiles/rails50.gemfile
+  - gemfiles/rails51.gemfile
